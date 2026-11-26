@@ -159,7 +159,8 @@ function setCameraMode(mode) {
   controls = createCameraControls();
   controls.target.copy(target);
   controls.update();
-  if (mode === 'iso') setIsoDirection(state.isoDirection, true);
+  // Returning to isometric mode restores the last selected fixed view.
+  if (mode === 'iso') setIsoDirection(state.isoDirection, false);
   updateCameraButtons();
 }
 const ISO_VIEWS = {
@@ -169,43 +170,58 @@ const ISO_VIEWS = {
   NW: new THREE.Vector3(-1, 0.7071, 1),
   TOP: new THREE.Vector3(0, 1, 0)
 };
+const ISO_AZIMUTHS = { NE: Math.PI / 4, SE: 3 * Math.PI / 4, SW: 5 * Math.PI / 4, NW: 7 * Math.PI / 4 };
 function setIsoDirection(direction, animate = true) {
   if (!ISO_VIEWS[direction]) return;
   if (state.cameraMode !== 'iso') setCameraMode('iso');
   state.isoDirection = direction;
   const target = controls.target.clone();
-  const radius = direction === 'TOP' ? 260 : 235;
-  const destinationOffset = ISO_VIEWS[direction].clone().normalize();
-  const destination = target.clone().addScaledVector(destinationOffset, radius);
-  const destinationUp = direction === 'TOP'
-    ? new THREE.Vector3(0, 0, -1)
-    : new THREE.Vector3(0, 1, 0);
-  const targetCamera = new THREE.Object3D();
-  targetCamera.position.copy(destination);
-  targetCamera.up.copy(destinationUp);
-  targetCamera.lookAt(target);
-  targetCamera.updateMatrixWorld();
 
-  if (animate) {
-    const fromOffset = camera.position.clone().sub(target);
-    const fromRadius = fromOffset.length();
+  // Top view is a separate overhead preset, not part of the horizontal orbit.
+  // Switching to or from it is direct so compass rotations never travel over
+  // the island or roll the camera.
+  if (direction === 'TOP') {
+    state.cameraTransition = null;
+    camera.up.set(0, 0, -1);
+    camera.position.copy(target).add(new THREE.Vector3(0, 260, 0));
+    camera.lookAt(target);
+    controls.enabled = true;
+    controls.update();
+    updateCameraButtons();
+    return;
+  }
+
+  const destinationAngle = ISO_AZIMUTHS[direction];
+  const destinationRadius = 235;
+  const horizontalRadius = destinationRadius * Math.sqrt(2 / 2.5);
+  const verticalOffset = destinationRadius * (0.7071 / Math.sqrt(2.5));
+
+  if (animate && state.isoDirection !== 'TOP') {
+    const offset = camera.position.clone().sub(target);
+    const fromAngle = Math.atan2(offset.x, offset.z);
+    const delta = Math.atan2(
+      Math.sin(destinationAngle - fromAngle),
+      Math.cos(destinationAngle - fromAngle)
+    );
     state.cameraTransition = {
-      fromDirection: fromOffset.normalize(),
-      toDirection: destinationOffset,
-      orbitQuaternion: new THREE.Quaternion().setFromUnitVectors(fromOffset.clone().normalize(), destinationOffset),
-      radius: fromRadius,
-      fromQuaternion: camera.quaternion.clone(),
-      toQuaternion: targetCamera.quaternion.clone(),
+      fromAngle,
+      delta,
+      destinationAngle,
+      horizontalRadius,
+      verticalOffset,
       target,
-      targetUp: destinationUp,
       start: performance.now(),
-      duration: 700
+      duration: 420
     };
     controls.enabled = false;
   } else {
     state.cameraTransition = null;
-    camera.up.copy(destinationUp);
-    camera.position.copy(destination);
+    camera.up.set(0, 1, 0);
+    camera.position.set(
+      target.x + Math.sin(destinationAngle) * horizontalRadius,
+      target.y + verticalOffset,
+      target.z + Math.cos(destinationAngle) * horizontalRadius
+    );
     camera.lookAt(target);
     controls.enabled = true;
     controls.update();
@@ -373,14 +389,21 @@ function animate(now = 0){
     const tr = state.cameraTransition;
     const raw = Math.min(1, (now - tr.start) / tr.duration);
     const eased = raw * raw * (3 - 2 * raw);
-    const orbitStep = new THREE.Quaternion().identity().slerp(tr.orbitQuaternion, eased);
-    const orbitDirection = tr.fromDirection.clone().applyQuaternion(orbitStep).normalize();
-    camera.position.copy(tr.target).addScaledVector(orbitDirection, tr.radius);
-    camera.quaternion.slerpQuaternions(tr.fromQuaternion, tr.toQuaternion, eased);
+    const angle = tr.fromAngle + tr.delta * eased;
+    camera.position.set(
+      tr.target.x + Math.sin(angle) * tr.horizontalRadius,
+      tr.target.y + tr.verticalOffset,
+      tr.target.z + Math.cos(angle) * tr.horizontalRadius
+    );
+    camera.up.set(0, 1, 0);
+    camera.lookAt(tr.target);
     if (raw >= 1) {
-      camera.position.copy(tr.target).addScaledVector(tr.toDirection, tr.radius);
-      camera.up.copy(tr.targetUp);
-      camera.quaternion.copy(tr.toQuaternion);
+      camera.position.set(
+        tr.target.x + Math.sin(tr.destinationAngle) * tr.horizontalRadius,
+        tr.target.y + tr.verticalOffset,
+        tr.target.z + Math.cos(tr.destinationAngle) * tr.horizontalRadius
+      );
+      camera.lookAt(tr.target);
       state.cameraTransition = null;
       controls.enabled = true;
       controls.update();
