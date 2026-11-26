@@ -6,7 +6,7 @@ const app = document.querySelector('#app');
 const state = {
   mode: 'buyer', tab: 'explore', selected: new Set(), owned: [],
   plots: {}, blocks: {}, blockColors: {}, paletteName: 'meadow', biome: 'meadow', blockType: 'grass',
-  camera: null, controls: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
+  camera: null, controls: null, cameraMode: 'iso', isoDirection: 'NE', cameraTransition: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: '', grassTiles: null, grassBaseColors: [], lastGrassUpdate: 0
 };
 const SIZE = 6, PLOT = 10, ROAD = 5, STEP = PLOT + ROAD;
@@ -59,7 +59,7 @@ app.innerHTML = `
     </section>
     <section class="workspace">
       <div class="world-panel">
-        <div class="panel-toolbar"><div><span class="live-dot"></span><span id="map-caption">THE WORLD · STARTER MAP</span></div><div class="toolbar-actions"><button id="reset-camera" class="small-button">Reset view ↗</button></div></div>
+        <div class="panel-toolbar"><div><span class="live-dot"></span><span id="map-caption">THE WORLD · STARTER MAP</span></div><div class="toolbar-actions"><div class="camera-switch" role="group" aria-label="Camera mode"><button class="small-button camera-mode active" data-camera-mode="iso">Isometric</button><button class="small-button camera-mode" data-camera-mode="free">Free 3D</button></div><div class="iso-directions" id="iso-directions" role="group" aria-label="Isometric direction"><button class="small-button direction-button" data-direction="NW" title="Northwest">NW</button><button class="small-button direction-button" data-direction="NE" title="Northeast">NE</button><button class="small-button direction-button" data-direction="SW" title="Southwest">SW</button><button class="small-button direction-button active" data-direction="SE" title="Southeast">SE</button><button class="small-button direction-button" data-direction="TOP" title="Top view">Top</button></div><button id="reset-camera" class="small-button">Reset view ↗</button></div></div>
         <div id="world-canvas" class="world-canvas"><div class="loading">Preparing your world…</div></div>
         <div class="map-legend"><span><i class="legend-dot available"></i>Available</span><span><i class="legend-dot owned"></i>Owned</span><span><i class="legend-dot selected"></i>Selected</span><span><i class="legend-dot road"></i>Shared grass · not buildable</span></div>
       </div>
@@ -75,9 +75,14 @@ app.innerHTML = `
 const canvasHost = document.querySelector('#world-canvas');
 const SKY_COLOR = 0x83cfff;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1200);
-camera.position.set(160, 150, 180);
-camera.lookAt(42.5, 0, 42.5);
+const CENTER = new THREE.Vector3(42.5, 0, 42.5);
+const perspectiveCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 1200);
+perspectiveCamera.position.set(160, 150, 180);
+perspectiveCamera.lookAt(CENTER);
+const orthoCamera = new THREE.OrthographicCamera(-100, 100, 100, -100, 0.1, 1200);
+orthoCamera.position.copy(perspectiveCamera.position);
+orthoCamera.lookAt(CENTER);
+let camera = orthoCamera;
 state.camera = camera;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -89,23 +94,94 @@ canvasHost.innerHTML = '';
 canvasHost.appendChild(renderer.domElement);
 state.renderer = renderer;
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(42.5, 0, 42.5);
-controls.enableDamping = true;
-controls.dampingFactor = 0.075;
-controls.enableRotate = true;
-controls.enablePan = true;
-controls.screenSpacePanning = true;
-controls.enableZoom = true;
-controls.minDistance = 90;
-controls.maxDistance = 520;
-controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
-controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
-controls.touches.ONE = THREE.TOUCH.ROTATE;
-controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
-state.controls = controls;
+function createCameraControls() {
+  if (state.controls) state.controls.dispose();
+  const next = new OrbitControls(camera, renderer.domElement);
+  next.target.copy(CENTER);
+  next.enableDamping = true;
+  next.dampingFactor = 0.075;
+  next.enableRotate = state.cameraMode === 'free';
+  next.enablePan = true;
+  next.screenSpacePanning = true;
+  next.enableZoom = true;
+  next.minDistance = 90;
+  next.maxDistance = 520;
+  next.minZoom = 0.55;
+  next.maxZoom = 3.5;
+  next.mouseButtons.LEFT = state.cameraMode === 'free' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  next.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+  next.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+  next.touches.ONE = state.cameraMode === 'free' ? THREE.TOUCH.ROTATE : THREE.TOUCH.PAN;
+  next.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+  state.controls = next;
+  return next;
+}
+let controls = createCameraControls();
 controls.update();
+
+function fitOrthoCamera() {
+  const distance = camera.position.distanceTo(controls.target);
+  const height = 2 * distance * Math.tan(THREE.MathUtils.degToRad(perspectiveCamera.fov / 2));
+  const aspect = canvasHost.clientWidth / Math.max(1, canvasHost.clientHeight);
+  orthoCamera.left = -height * aspect / 2;
+  orthoCamera.right = height * aspect / 2;
+  orthoCamera.top = height / 2;
+  orthoCamera.bottom = -height / 2;
+  orthoCamera.zoom = 1;
+  orthoCamera.updateProjectionMatrix();
+}
+function updateCameraButtons() {
+  document.querySelectorAll('[data-camera-mode]').forEach(button => button.classList.toggle('active', button.dataset.cameraMode === state.cameraMode));
+  document.querySelectorAll('[data-direction]').forEach(button => button.classList.toggle('active', button.dataset.direction === state.isoDirection));
+  document.querySelector('#iso-directions').classList.toggle('hidden', state.cameraMode !== 'iso');
+}
+function setCameraMode(mode) {
+  if (mode === state.cameraMode) return;
+  const target = controls.target.clone();
+  const position = camera.position.clone();
+  const direction = camera.getWorldDirection(new THREE.Vector3());
+  if (mode === 'iso') {
+    camera = orthoCamera;
+    fitOrthoCamera();
+    camera.position.copy(position);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(target);
+  } else {
+    camera = perspectiveCamera;
+    camera.position.copy(position);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(target);
+    camera.zoom = 1;
+    camera.updateProjectionMatrix();
+  }
+  state.camera = camera;
+  state.cameraMode = mode;
+  controls = createCameraControls();
+  controls.target.copy(target);
+  controls.update();
+  if (mode === 'iso') setIsoDirection(state.isoDirection, false);
+  updateCameraButtons();
+}
+const ISO_VIEWS = {
+  NE: new THREE.Vector3(1, 1.15, 1),
+  SE: new THREE.Vector3(1, 1.15, -1),
+  SW: new THREE.Vector3(-1, 1.15, -1),
+  NW: new THREE.Vector3(-1, 1.15, 1),
+  TOP: new THREE.Vector3(0, 1, 0)
+};
+function setIsoDirection(direction, animate = true) {
+  if (state.cameraMode !== 'iso') setCameraMode('iso');
+  state.isoDirection = direction;
+  const target = controls.target.clone();
+  const offset = ISO_VIEWS[direction].clone().normalize().multiplyScalar(direction === 'TOP' ? 260 : 235);
+  const destination = target.clone().add(offset);
+  if (direction === 'TOP') camera.up.set(0, 0, -1);
+  else camera.up.set(0, 1, 0);
+  if (animate) state.cameraTransition = { from: camera.position.clone(), to: destination, start: performance.now(), duration: 420, target };
+  else { camera.position.copy(destination); camera.lookAt(target); controls.update(); }
+  updateCameraButtons();
+}
+
 scene.add(new THREE.HemisphereLight(0xffffff, 0x85877f, 2.0));
 const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(45,90,35); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); scene.add(sun);
 // A single floating island slab; no external floor or grid.
@@ -215,8 +291,14 @@ function refreshSelection() {
 }
 function resize() {
   const w = canvasHost.clientWidth, h = canvasHost.clientHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  perspectiveCamera.aspect = w / h;
+  perspectiveCamera.updateProjectionMatrix();
+  if (camera === orthoCamera) {
+    const height = Math.abs(orthoCamera.top - orthoCamera.bottom);
+    const halfWidth = height * (w / h) / 2;
+    orthoCamera.left = -halfWidth; orthoCamera.right = halfWidth;
+    orthoCamera.updateProjectionMatrix();
+  }
   renderer.setSize(w, h);
 }
 window.addEventListener('resize', resize);
@@ -256,6 +338,14 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 function animate(now = 0){
   requestAnimationFrame(animate);
+  if (state.cameraTransition) {
+    const tr = state.cameraTransition;
+    const raw = Math.min(1, (now - tr.start) / tr.duration);
+    const eased = raw * raw * (3 - 2 * raw);
+    camera.position.lerpVectors(tr.from, tr.to, eased);
+    camera.lookAt(tr.target);
+    if (raw >= 1) state.cameraTransition = null;
+  }
   controls.update();
   // Slowly breathe the individual grass tiles through tiny brightness changes.
   // Each tile keeps its own green tone; the movement is subtle rather than noisy.
@@ -277,13 +367,21 @@ function toast(message){const el=document.querySelector('#toast');el.textContent
 function setTab(tab){state.tab=tab;document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));renderPage();}
 document.querySelectorAll('.nav-link').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
 document.querySelector('#mode-select').addEventListener('change',e=>{state.mode=e.target.value;state.selected.clear();refreshSelection();renderPage();toast(state.mode==='admin'?'Admin demo mode enabled.':'Buyer demo mode enabled.');});
+document.querySelectorAll('[data-camera-mode]').forEach(button => button.addEventListener('click', () => setCameraMode(button.dataset.cameraMode)));
+document.querySelectorAll('[data-direction]').forEach(button => button.addEventListener('click', () => setIsoDirection(button.dataset.direction)));
 document.querySelector('#reset-camera').addEventListener('click', () => {
-  controls.target.set(42.5, 0, 42.5);
-  camera.position.set(160, 150, 180);
-  camera.zoom = 1;
-  camera.updateProjectionMatrix();
-  controls.update();
+  state.cameraTransition = null;
+  controls.target.copy(CENTER);
+  if (state.cameraMode === 'iso') setIsoDirection('NE');
+  else {
+    camera.position.set(160, 150, 180);
+    camera.up.set(0, 1, 0);
+    camera.zoom = 1;
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
 });
+updateCameraButtons();
 
 document.querySelector('#help-btn').addEventListener('click',()=>showModal('<p class="eyebrow">ABOUT THE PROTOTYPE</p><h2>A world made by many.</h2><p>This is an interactive frontend prototype. Purchases are simulated, and your demo data stays in this browser. Admin mode is not protected and must never be treated as real authorization.</p><p>Each plot measures 10 × 10 blocks. Shared grass strips are 5 blocks wide and cannot be selected. Building has no configured height cap in this prototype.</p>'));
 function updateStats(){document.querySelector('#owned-count').textContent=state.owned.length;let free=0;for(let z=0;z<SIZE;z++)for(let x=0;x<SIZE;x++)if(isAvailable(plotId(x,z)))free++;document.querySelector('#available-count').textContent=free;}
