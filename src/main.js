@@ -192,6 +192,7 @@ function setIsoDirection(direction, animate = true) {
     state.cameraTransition = {
       fromDirection: fromOffset.normalize(),
       toDirection: destinationOffset,
+      orbitQuaternion: new THREE.Quaternion().setFromUnitVectors(fromOffset.clone().normalize(), destinationOffset),
       radius: fromRadius,
       fromQuaternion: camera.quaternion.clone(),
       toQuaternion: targetCamera.quaternion.clone(),
@@ -372,7 +373,8 @@ function animate(now = 0){
     const tr = state.cameraTransition;
     const raw = Math.min(1, (now - tr.start) / tr.duration);
     const eased = raw * raw * (3 - 2 * raw);
-    const orbitDirection = tr.fromDirection.clone().slerp(tr.toDirection, eased).normalize();
+    const orbitStep = new THREE.Quaternion().identity().slerp(tr.orbitQuaternion, eased);
+    const orbitDirection = tr.fromDirection.clone().applyQuaternion(orbitStep).normalize();
     camera.position.copy(tr.target).addScaledVector(orbitDirection, tr.radius);
     camera.quaternion.slerpQuaternions(tr.fromQuaternion, tr.toQuaternion, eased);
     if (raw >= 1) {
