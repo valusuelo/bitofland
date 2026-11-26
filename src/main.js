@@ -75,8 +75,8 @@ app.innerHTML = `
 const canvasHost = document.querySelector('#world-canvas');
 const SKY_COLOR = 0x83cfff;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
-const camera = new THREE.OrthographicCamera(-75, 75, 75, -75, 0.1, 800);
-camera.position.set(125, 112, 145);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1200);
+camera.position.set(160, 150, 180);
 camera.lookAt(42.5, 0, 42.5);
 state.camera = camera;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -97,8 +97,8 @@ controls.enableRotate = true;
 controls.enablePan = true;
 controls.screenSpacePanning = true;
 controls.enableZoom = true;
-controls.minZoom = 0.55;
-controls.maxZoom = 3.5;
+controls.minDistance = 90;
+controls.maxDistance = 520;
 controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
 controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
@@ -215,12 +215,7 @@ function refreshSelection() {
 }
 function resize() {
   const w = canvasHost.clientWidth, h = canvasHost.clientHeight;
-  const viewHeight = 150;
-  const aspect = w / h;
-  camera.left = -(viewHeight * aspect) / 2;
-  camera.right = (viewHeight * aspect) / 2;
-  camera.top = viewHeight / 2;
-  camera.bottom = -viewHeight / 2;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
 }
@@ -284,7 +279,7 @@ document.querySelectorAll('.nav-link').forEach(b=>b.addEventListener('click',()=
 document.querySelector('#mode-select').addEventListener('change',e=>{state.mode=e.target.value;state.selected.clear();refreshSelection();renderPage();toast(state.mode==='admin'?'Admin demo mode enabled.':'Buyer demo mode enabled.');});
 document.querySelector('#reset-camera').addEventListener('click', () => {
   controls.target.set(42.5, 0, 42.5);
-  camera.position.set(125, 112, 145);
+  camera.position.set(160, 150, 180);
   camera.zoom = 1;
   camera.updateProjectionMatrix();
   controls.update();
