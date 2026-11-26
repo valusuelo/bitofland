@@ -174,6 +174,7 @@ const ISO_AZIMUTHS = { NE: Math.PI / 4, SE: 3 * Math.PI / 4, SW: 5 * Math.PI / 4
 function setIsoDirection(direction, animate = true) {
   if (!ISO_VIEWS[direction]) return;
   if (state.cameraMode !== 'iso') setCameraMode('iso');
+  const previousDirection = state.isoDirection;
   state.isoDirection = direction;
   const target = controls.target.clone();
 
@@ -196,7 +197,7 @@ function setIsoDirection(direction, animate = true) {
   const horizontalRadius = destinationRadius * Math.sqrt(2 / 2.5);
   const verticalOffset = destinationRadius * (0.7071 / Math.sqrt(2.5));
 
-  if (animate && state.isoDirection !== 'TOP') {
+  if (animate && previousDirection !== 'TOP') {
     const offset = camera.position.clone().sub(target);
     const fromAngle = Math.atan2(offset.x, offset.z);
     const delta = Math.atan2(
