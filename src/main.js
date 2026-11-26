@@ -215,7 +215,8 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
 }
-window.addEventListener('resize',resize);
+window.addEventListener('resize', resize);
+resize();
 let pointerStart = null;
 let pointerMoved = false;
 renderer.domElement.addEventListener('pointerdown', e => {
