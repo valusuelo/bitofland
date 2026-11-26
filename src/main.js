@@ -79,6 +79,16 @@ const camera = new THREE.OrthographicCamera(-75, 75, 75, -75, 0.1, 800);
 camera.position.set(125, 112, 145);
 camera.lookAt(42.5, 0, 42.5);
 state.camera = camera;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight);
+canvasHost.innerHTML = '';
+canvasHost.appendChild(renderer.domElement);
+state.renderer = renderer;
+
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(42.5, 0, 42.5);
 controls.enableDamping = true;
@@ -96,7 +106,6 @@ controls.touches.ONE = THREE.TOUCH.ROTATE;
 controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
 state.controls = controls;
 controls.update();
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight); canvasHost.innerHTML=''; canvasHost.appendChild(renderer.domElement); state.renderer = renderer;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x85877f, 2.0));
 const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(45,90,35); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); scene.add(sun);
 // A single floating island slab; no external floor or grid.
