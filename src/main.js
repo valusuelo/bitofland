@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import './style.css';
 
 const app = document.querySelector('#app');
 const state = {
   mode: 'buyer', tab: 'explore', selected: new Set(), owned: [],
   plots: {}, blocks: {}, blockColors: {}, paletteName: 'meadow', biome: 'meadow', blockType: 'grass',
-  camera: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
+  camera: null, controls: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: '', grassTiles: null, grassBaseColors: [], lastGrassUpdate: 0
 };
 const SIZE = 6, PLOT = 10, ROAD = 5, STEP = PLOT + ROAD;
@@ -74,7 +75,27 @@ app.innerHTML = `
 const canvasHost = document.querySelector('#world-canvas');
 const SKY_COLOR = 0x83cfff;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500); camera.position.set(75, 88, 105); camera.lookAt(42,0,42); state.camera = camera;
+const camera = new THREE.OrthographicCamera(-75, 75, 75, -75, 0.1, 800);
+camera.position.set(125, 112, 145);
+camera.lookAt(42.5, 0, 42.5);
+state.camera = camera;
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(42.5, 0, 42.5);
+controls.enableDamping = true;
+controls.dampingFactor = 0.075;
+controls.enableRotate = true;
+controls.enablePan = true;
+controls.screenSpacePanning = true;
+controls.enableZoom = true;
+controls.minZoom = 0.55;
+controls.maxZoom = 3.5;
+controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+controls.touches.ONE = THREE.TOUCH.ROTATE;
+controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+state.controls = controls;
+controls.update();
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight); canvasHost.innerHTML=''; canvasHost.appendChild(renderer.domElement); state.renderer = renderer;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x85877f, 2.0));
 const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(45,90,35); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); scene.add(sun);
@@ -183,19 +204,42 @@ function refreshSelection() {
     m.userData.highlight.material.opacity = selected ? 0.42 : 0;
   });
 }
-function resize() { const w=canvasHost.clientWidth,h=canvasHost.clientHeight; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); }
+function resize() {
+  const w = canvasHost.clientWidth, h = canvasHost.clientHeight;
+  const viewHeight = 150;
+  const aspect = w / h;
+  camera.left = -(viewHeight * aspect) / 2;
+  camera.right = (viewHeight * aspect) / 2;
+  camera.top = viewHeight / 2;
+  camera.bottom = -viewHeight / 2;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
 window.addEventListener('resize',resize);
-let dragging=false, moved=false, last={x:0,y:0};
-renderer.domElement.addEventListener('pointerdown',e=>{dragging=true;moved=false;last={x:e.clientX,y:e.clientY};});
-renderer.domElement.addEventListener('pointermove',e=>{if(!dragging)return;const dx=e.clientX-last.x,dy=e.clientY-last.y;if(Math.abs(dx)+Math.abs(dy)>2)moved=true;camera.position.x-=dx*0.13;camera.position.z-=dy*0.13;camera.lookAt(42,0,42);last={x:e.clientX,y:e.clientY};});
-window.addEventListener('pointerup',()=>dragging=false);
-renderer.domElement.addEventListener('wheel',e=>{camera.position.multiplyScalar(e.deltaY>0?1.06:0.94);camera.position.y=Math.max(24,Math.min(180,camera.position.y));camera.lookAt(42,0,42);},{passive:true});
-renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
-renderer.domElement.addEventListener('pointerup',e=>{
-  if(moved)return; const rect=renderer.domElement.getBoundingClientRect(); state.pointer.x=((e.clientX-rect.left)/rect.width)*2-1; state.pointer.y=-((e.clientY-rect.top)/rect.height)*2+1; state.raycaster.setFromCamera(state.pointer,camera);
+let pointerStart = null;
+let pointerMoved = false;
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  pointerStart = { x: e.clientX, y: e.clientY };
+  pointerMoved = false;
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!pointerStart) return;
+  if (Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y) > 6) pointerMoved = true;
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  if (e.button !== 0) return;
+  const wasMoved = pointerMoved;
+  pointerStart = null;
+  pointerMoved = false;
+  if (wasMoved) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  state.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  state.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  state.raycaster.setFromCamera(state.pointer, camera);
   if(state.tab==='build' && state.mode==='buyer') {
     const hits=state.raycaster.intersectObjects([...plotMeshes,...state.voxelMeshes],false); if(!hits.length)return; const hit=hits[0]; const id=hit.object.userData.plotId; if(!isOwned(id)){toast('Choose one of your plots to build.');return;}
-    if(e.button===2){if(hit.object.userData.local)removeVoxel(hit.object);return;}
+    if(e.shiftKey && hit.object.userData.local){removeVoxel(hit.object);return;}
     const point=hit.point; const {x:px,z:pz}=plotCoords(id); const lx=Math.floor(point.x-px*STEP),lz=Math.floor(point.z-pz*STEP); if(lx<0||lx>=10||lz<0||lz>=10)return;
     const y=hit.object.userData.local?hit.object.userData.local.y+1:0; addVoxel(id,lx,y,lz,state.blockType); toast('Block placed.');
     return;
@@ -207,6 +251,7 @@ renderer.domElement.addEventListener('pointerup',e=>{
 });
 function animate(now = 0){
   requestAnimationFrame(animate);
+  controls.update();
   // Slowly breathe the individual grass tiles through tiny brightness changes.
   // Each tile keeps its own green tone; the movement is subtle rather than noisy.
   if (state.grassTiles && now - state.lastGrassUpdate > 180) {
@@ -227,7 +272,13 @@ function toast(message){const el=document.querySelector('#toast');el.textContent
 function setTab(tab){state.tab=tab;document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));renderPage();}
 document.querySelectorAll('.nav-link').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
 document.querySelector('#mode-select').addEventListener('change',e=>{state.mode=e.target.value;state.selected.clear();refreshSelection();renderPage();toast(state.mode==='admin'?'Admin demo mode enabled.':'Buyer demo mode enabled.');});
-document.querySelector('#reset-camera').addEventListener('click',()=>{camera.position.set(75,88,105);camera.lookAt(42,0,42);});
+document.querySelector('#reset-camera').addEventListener('click', () => {
+  controls.target.set(42.5, 0, 42.5);
+  camera.position.set(125, 112, 145);
+  camera.zoom = 1;
+  camera.updateProjectionMatrix();
+  controls.update();
+});
 
 document.querySelector('#help-btn').addEventListener('click',()=>showModal('<p class="eyebrow">ABOUT THE PROTOTYPE</p><h2>A world made by many.</h2><p>This is an interactive frontend prototype. Purchases are simulated, and your demo data stays in this browser. Admin mode is not protected and must never be treated as real authorization.</p><p>Each plot measures 10 × 10 blocks. Shared grass strips are 5 blocks wide and cannot be selected. Building has no configured height cap in this prototype.</p>'));
 function updateStats(){document.querySelector('#owned-count').textContent=state.owned.length;let free=0;for(let z=0;z<SIZE;z++)for(let x=0;x<SIZE;x++)if(isAvailable(plotId(x,z)))free++;document.querySelector('#available-count').textContent=free;}
@@ -252,7 +303,7 @@ function renderSide(){
   panel.querySelector('#clear-selection').onclick=()=>{state.selected.clear();refreshSelection();renderSide();};
   panel.querySelector('#checkout').onclick=openCheckout;
  } else if(state.tab==='build'){
-  const owned=state.owned;panel.innerHTML=`<p class="eyebrow">BUILD MODE</p><h2>Pick a canvas.</h2><p class="muted">Choose one of your plots, then click its surface to place blocks. Right-click a placed block to remove it.</p><div class="field"><label>Your plot</label><select id="build-plot">${owned.length?owned.map(id=>'<option>'+id+'</option>').join(''):'<option value="">No plots yet</option>'}</select></div><div class="field"><label>Choose a block</label><div class="block-palette">${Object.entries(BLOCKS).map(([k,v])=>'<button class="block-choice '+(state.blockType===k?'chosen':'')+'" data-block="'+k+'" title="'+v.label+'"><i style="background:'+blockColor(k)+'"></i><span>'+v.label+'</span></button>').join('')}</div></div><div class="field"><label>Preset color palettes</label><div class="preset-palettes">${Object.entries(PALETTES).map(([k,p])=>'<button class="preset-choice '+(state.paletteName===k?'chosen':'')+'" data-palette="'+k+'"><span class="preset-swatches">'+Object.values(p.colors).slice(0,5).map(c=>'<i style="background:'+c+'"></i>').join('')+'</span><span>'+p.label+'</span></button>').join('')}</div></div><div class="field color-editor"><label for="block-color">Custom color · '+BLOCKS[state.blockType].label+'</label><div class="color-picker-row"><input id="block-color" type="color" value="'+blockColor(state.blockType)+'"/><span>'+blockColor(state.blockType).toUpperCase()+'</span></div><p class="tiny muted">Choose any color using the standard color picker. It changes only the selected block type.</p></div><div class="note">No fixed building-height limit is configured. Keep an eye on performance when creating very tall structures.</div>`;
+  const owned=state.owned;panel.innerHTML=`<p class="eyebrow">BUILD MODE</p><h2>Pick a canvas.</h2><p class="muted">Choose one of your plots, then click its surface to place blocks. Hold Shift and click a placed block to remove it. Right-drag pans the view.</p><div class="field"><label>Your plot</label><select id="build-plot">${owned.length?owned.map(id=>'<option>'+id+'</option>').join(''):'<option value="">No plots yet</option>'}</select></div><div class="field"><label>Choose a block</label><div class="block-palette">${Object.entries(BLOCKS).map(([k,v])=>'<button class="block-choice '+(state.blockType===k?'chosen':'')+'" data-block="'+k+'" title="'+v.label+'"><i style="background:'+blockColor(k)+'"></i><span>'+v.label+'</span></button>').join('')}</div></div><div class="field"><label>Preset color palettes</label><div class="preset-palettes">${Object.entries(PALETTES).map(([k,p])=>'<button class="preset-choice '+(state.paletteName===k?'chosen':'')+'" data-palette="'+k+'"><span class="preset-swatches">'+Object.values(p.colors).slice(0,5).map(c=>'<i style="background:'+c+'"></i>').join('')+'</span><span>'+p.label+'</span></button>').join('')}</div></div><div class="field color-editor"><label for="block-color">Custom color · '+BLOCKS[state.blockType].label+'</label><div class="color-picker-row"><input id="block-color" type="color" value="'+blockColor(state.blockType)+'"/><span>'+blockColor(state.blockType).toUpperCase()+'</span></div><p class="tiny muted">Choose any color using the standard color picker. It changes only the selected block type.</p></div><div class="note">No fixed building-height limit is configured. Keep an eye on performance when creating very tall structures.</div>`;
   const select=panel.querySelector('#build-plot');if(owned.length){select.value=state.selected.size?Array.from(state.selected)[0]:owned[0];select.onchange=()=>{state.selected=new Set([select.value]);refreshSelection();};}
   panel.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>{state.blockType=b.dataset.block;renderSide();});
   panel.querySelectorAll('[data-palette]').forEach(b=>b.onclick=()=>{const name=b.dataset.palette;state.paletteName=name;state.blockColors={...PALETTES[name].colors};updatePlacedBlockColors();persist();renderSide();toast(PALETTES[name].label+' palette applied.');});
