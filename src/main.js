@@ -119,8 +119,8 @@ function createCameraControls() {
 let controls = createCameraControls();
 controls.update();
 
-function fitOrthoCamera() {
-  const distance = camera.position.distanceTo(controls.target);
+function fitOrthoCamera(position = camera.position, target = controls.target) {
+  const distance = position.distanceTo(target);
   const height = 2 * distance * Math.tan(THREE.MathUtils.degToRad(perspectiveCamera.fov / 2));
   const aspect = canvasHost.clientWidth / Math.max(1, canvasHost.clientHeight);
   orthoCamera.left = -height * aspect / 2;
@@ -142,7 +142,7 @@ function setCameraMode(mode) {
   const direction = camera.getWorldDirection(new THREE.Vector3());
   if (mode === 'iso') {
     camera = orthoCamera;
-    fitOrthoCamera();
+    fitOrthoCamera(position, target);
     camera.position.copy(position);
     camera.up.set(0, 1, 0);
     camera.lookAt(target);
@@ -163,10 +163,10 @@ function setCameraMode(mode) {
   updateCameraButtons();
 }
 const ISO_VIEWS = {
-  NE: new THREE.Vector3(1, 1.15, 1),
-  SE: new THREE.Vector3(1, 1.15, -1),
-  SW: new THREE.Vector3(-1, 1.15, -1),
-  NW: new THREE.Vector3(-1, 1.15, 1),
+  NE: new THREE.Vector3(1, 0.7071, 1),
+  SE: new THREE.Vector3(1, 0.7071, -1),
+  SW: new THREE.Vector3(-1, 0.7071, -1),
+  NW: new THREE.Vector3(-1, 0.7071, 1),
   TOP: new THREE.Vector3(0, 1, 0)
 };
 function setIsoDirection(direction, animate = true) {
@@ -177,8 +177,16 @@ function setIsoDirection(direction, animate = true) {
   const destination = target.clone().add(offset);
   if (direction === 'TOP') camera.up.set(0, 0, -1);
   else camera.up.set(0, 1, 0);
-  if (animate) state.cameraTransition = { from: camera.position.clone(), to: destination, start: performance.now(), duration: 420, target };
-  else { camera.position.copy(destination); camera.lookAt(target); controls.update(); }
+  if (animate) {
+    controls.enabled = false;
+    state.cameraTransition = { from: camera.position.clone(), to: destination, start: performance.now(), duration: 420, target };
+  } else {
+    state.cameraTransition = null;
+    camera.position.copy(destination);
+    camera.lookAt(target);
+    controls.enabled = true;
+    controls.update();
+  }
   updateCameraButtons();
 }
 
@@ -344,7 +352,7 @@ function animate(now = 0){
     const eased = raw * raw * (3 - 2 * raw);
     camera.position.lerpVectors(tr.from, tr.to, eased);
     camera.lookAt(tr.target);
-    if (raw >= 1) state.cameraTransition = null;
+    if (raw >= 1) { state.cameraTransition = null; controls.enabled = true; controls.update(); }
   }
   controls.update();
   // Slowly breathe the individual grass tiles through tiny brightness changes.
