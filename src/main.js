@@ -137,9 +137,9 @@ function updateCameraButtons() {
 }
 function setCameraMode(mode) {
   if (mode === state.cameraMode) return;
+  state.cameraTransition = null;
   const target = controls.target.clone();
   const position = camera.position.clone();
-  const direction = camera.getWorldDirection(new THREE.Vector3());
   if (mode === 'iso') {
     camera = orthoCamera;
     fitOrthoCamera(position, target);
@@ -159,7 +159,7 @@ function setCameraMode(mode) {
   controls = createCameraControls();
   controls.target.copy(target);
   controls.update();
-  if (mode === 'iso') setIsoDirection(state.isoDirection, false);
+  if (mode === 'iso') setIsoDirection(state.isoDirection, true);
   updateCameraButtons();
 }
 const ISO_VIEWS = {
@@ -170,18 +170,41 @@ const ISO_VIEWS = {
   TOP: new THREE.Vector3(0, 1, 0)
 };
 function setIsoDirection(direction, animate = true) {
+  if (!ISO_VIEWS[direction]) return;
   if (state.cameraMode !== 'iso') setCameraMode('iso');
   state.isoDirection = direction;
   const target = controls.target.clone();
-  const offset = ISO_VIEWS[direction].clone().normalize().multiplyScalar(direction === 'TOP' ? 260 : 235);
-  const destination = target.clone().add(offset);
-  if (direction === 'TOP') camera.up.set(0, 0, -1);
-  else camera.up.set(0, 1, 0);
+  const radius = direction === 'TOP' ? 260 : 235;
+  const destinationOffset = ISO_VIEWS[direction].clone().normalize();
+  const destination = target.clone().addScaledVector(destinationOffset, radius);
+  const destinationUp = direction === 'TOP'
+    ? new THREE.Vector3(0, 0, -1)
+    : new THREE.Vector3(0, 1, 0);
+  const targetCamera = new THREE.Object3D();
+  targetCamera.position.copy(destination);
+  targetCamera.up.copy(destinationUp);
+  targetCamera.lookAt(target);
+  targetCamera.updateMatrixWorld();
+
   if (animate) {
+    const fromOffset = camera.position.clone().sub(target);
+    const fromRadius = fromOffset.length();
+    state.cameraTransition = {
+      fromDirection: fromOffset.normalize(),
+      toDirection: destinationOffset,
+      orbitQuaternion: new THREE.Quaternion().setFromUnitVectors(fromOffset.clone().normalize(), destinationOffset),
+      radius: fromRadius,
+      fromQuaternion: camera.quaternion.clone(),
+      toQuaternion: targetCamera.quaternion.clone(),
+      target,
+      targetUp: destinationUp,
+      start: performance.now(),
+      duration: 700
+    };
     controls.enabled = false;
-    state.cameraTransition = { from: camera.position.clone(), to: destination, start: performance.now(), duration: 420, target };
   } else {
     state.cameraTransition = null;
+    camera.up.copy(destinationUp);
     camera.position.copy(destination);
     camera.lookAt(target);
     controls.enabled = true;
@@ -350,11 +373,21 @@ function animate(now = 0){
     const tr = state.cameraTransition;
     const raw = Math.min(1, (now - tr.start) / tr.duration);
     const eased = raw * raw * (3 - 2 * raw);
-    camera.position.lerpVectors(tr.from, tr.to, eased);
-    camera.lookAt(tr.target);
-    if (raw >= 1) { state.cameraTransition = null; controls.enabled = true; controls.update(); }
+    const orbitStep = new THREE.Quaternion().identity().slerp(tr.orbitQuaternion, eased);
+    const orbitDirection = tr.fromDirection.clone().applyQuaternion(orbitStep).normalize();
+    camera.position.copy(tr.target).addScaledVector(orbitDirection, tr.radius);
+    camera.quaternion.slerpQuaternions(tr.fromQuaternion, tr.toQuaternion, eased);
+    if (raw >= 1) {
+      camera.position.copy(tr.target).addScaledVector(tr.toDirection, tr.radius);
+      camera.up.copy(tr.targetUp);
+      camera.quaternion.copy(tr.toQuaternion);
+      state.cameraTransition = null;
+      controls.enabled = true;
+      controls.update();
+    }
+  } else {
+    controls.update();
   }
-  controls.update();
   // Slowly breathe the individual grass tiles through tiny brightness changes.
   // Each tile keeps its own green tone; the movement is subtle rather than noisy.
   if (state.grassTiles && now - state.lastGrassUpdate > 180) {
