@@ -4,7 +4,7 @@ import './style.css';
 const app = document.querySelector('#app');
 const state = {
   mode: 'buyer', tab: 'explore', selected: new Set(), owned: [],
-  plots: {}, blocks: {}, biome: 'meadow', blockType: 'grass',
+  plots: {}, blocks: {}, blockColors: {}, paletteName: 'meadow', biome: 'meadow', blockType: 'grass',
   showGrid: true, camera: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: ''
 };
@@ -15,13 +15,24 @@ const BLOCKS = {
   wood: { color: 0x9a7653, label: 'Wood' }, white: { color: 0xe8e7e1, label: 'White' },
   dark: { color: 0x424644, label: 'Dark' }, leaf: { color: 0x547b5d, label: 'Leaves' }
 };
-const BIOMES = { meadow: 0x8eaa83, autumn: 0xb88b60, snow: 0xd9dedc, desert: 0xcdb77f };
+const PALETTES = {
+  meadow: { label: 'Meadow', colors: { grass:'#8ee35b', soil:'#a96f45', stone:'#9aa3a8', sand:'#f1d77a', wood:'#95613d', white:'#f4f1df', dark:'#424b50', leaf:'#45ad55' } },
+  candy: { label: 'Candy', colors: { grass:'#8be0a0', soil:'#c98b73', stone:'#a6b9d7', sand:'#ffe09b', wood:'#a66e83', white:'#fff4e8', dark:'#55516b', leaf:'#65c9b2' } },
+  ocean: { label: 'Ocean', colors: { grass:'#55c6a4', soil:'#a77c63', stone:'#8ca9bd', sand:'#f2d69b', wood:'#89644f', white:'#e8f5f4', dark:'#344e62', leaf:'#299b83' } },
+  sunset: { label: 'Sunset', colors: { grass:'#b5d957', soil:'#b87550', stone:'#aaa0a0', sand:'#f5c56e', wood:'#8f5946', white:'#fff0d5', dark:'#55424a', leaf:'#83ae4d' } },
+  monochrome: { label: 'Soft', colors: { grass:'#9fc7a1', soil:'#a58b78', stone:'#aeb2b0', sand:'#ded0a8', wood:'#8b7664', white:'#e8e8e2', dark:'#555956', leaf:'#789c79' } }
+};
+const BIOMES = { meadow: 0x8ee35b, autumn: 0xb88b60, snow: 0xd9dedc, desert: 0xcdb77f };
 const key = (x,z) => x + ',' + z;
 const plotId = (x,z) => String.fromCharCode(65 + z) + (x + 1);
 const readStore = () => { try { return JSON.parse(localStorage.getItem('bitofland-demo') || '{}'); } catch { return {}; } };
 const saved = readStore();
-Object.assign(state, { owned: saved.owned || [], plots: saved.plots || {}, blocks: saved.blocks || {} });
-const persist = () => localStorage.setItem('bitofland-demo', JSON.stringify({ owned: state.owned, plots: state.plots, blocks: state.blocks }));
+Object.assign(state, { owned: saved.owned || [], plots: saved.plots || {}, blocks: saved.blocks || {}, blockColors: saved.blockColors || { ...PALETTES.meadow.colors }, paletteName: saved.paletteName || 'meadow' });
+const persist = () => localStorage.setItem('bitofland-demo', JSON.stringify({ owned: state.owned, plots: state.plots, blocks: state.blocks, blockColors: state.blockColors, paletteName: state.paletteName }));
+const blockColor = type => state.blockColors[type] || PALETTES.meadow.colors[type];
+function updatePlacedBlockColors() {
+  state.voxelMeshes.forEach(mesh => mesh.material.color.set(state.blockColors[mesh.userData.type] || blockColor('grass')));
+}
 const isOwned = id => state.owned.includes(id);
 const isAvailable = id => state.plots[id]?.status !== 'unavailable' && !isOwned(id);
 const plotCoords = id => ({ x: id.charCodeAt(0)-65, z: Number(id.slice(1))-1 });
@@ -91,8 +102,8 @@ function makeWorld() {
   refreshSelection();
 }
 function addVoxel(id,x,y,z,type,save=true) {
-  const {x:px,z:pz}=plotCoords(id); const material=new THREE.MeshStandardMaterial({color:BLOCKS[type]?.color ?? 0x8eaa83});
-  const mesh=new THREE.Mesh(new THREE.BoxGeometry(0.96,0.96,0.96),material); mesh.position.set(px*STEP+x+0.5,y+0.5,pz*STEP+z+0.5); mesh.castShadow=true; mesh.receiveShadow=true; mesh.userData={plotId:id,local:{x,y,z}};
+  const {x:px,z:pz}=plotCoords(id); const material=new THREE.MeshStandardMaterial({color:blockColor(type) || 0x8ee35b});
+  const mesh=new THREE.Mesh(new THREE.BoxGeometry(0.96,0.96,0.96),material); mesh.position.set(px*STEP+x+0.5,y+0.5,pz*STEP+z+0.5); mesh.castShadow=true; mesh.receiveShadow=true; mesh.userData={plotId:id,local:{x,y,z},type};
   buildGroup.add(mesh); state.voxelMeshes.push(mesh);
   if(save) { state.blocks[id] ||= []; state.blocks[id].push({x,y,z,type}); persist(); }
 }
@@ -156,9 +167,11 @@ function renderSide(){
   panel.querySelector('#clear-selection').onclick=()=>{state.selected.clear();refreshSelection();renderSide();};
   panel.querySelector('#checkout').onclick=openCheckout;
  } else if(state.tab==='build'){
-  const owned=state.owned;panel.innerHTML=`<p class="eyebrow">BUILD MODE</p><h2>Pick a canvas.</h2><p class="muted">Choose one of your plots, then click its surface to place blocks. Right-click a placed block to remove it.</p><div class="field"><label>Your plot</label><select id="build-plot">${owned.length?owned.map(id=>'<option>'+id+'</option>').join(''):'<option value="">No plots yet</option>'}</select></div><div class="field"><label>Block palette</label><div class="block-palette">${Object.entries(BLOCKS).map(([k,v])=>'<button class="block-choice '+(state.blockType===k?'chosen':'')+'" data-block="'+k+'" title="'+v.label+'"><i style="background:#'+v.color.toString(16).padStart(6,'0')+'"></i><span>'+v.label+'</span></button>').join('')}</div></div><div class="note">No fixed building-height limit is configured. Keep an eye on performance when creating very tall structures.</div>`;
+  const owned=state.owned;panel.innerHTML=`<p class="eyebrow">BUILD MODE</p><h2>Pick a canvas.</h2><p class="muted">Choose one of your plots, then click its surface to place blocks. Right-click a placed block to remove it.</p><div class="field"><label>Your plot</label><select id="build-plot">${owned.length?owned.map(id=>'<option>'+id+'</option>').join(''):'<option value="">No plots yet</option>'}</select></div><div class="field"><label>Choose a block</label><div class="block-palette">${Object.entries(BLOCKS).map(([k,v])=>'<button class="block-choice '+(state.blockType===k?'chosen':'')+'" data-block="'+k+'" title="'+v.label+'"><i style="background:'+blockColor(k)+'"></i><span>'+v.label+'</span></button>').join('')}</div></div><div class="field"><label>Preset color palettes</label><div class="preset-palettes">${Object.entries(PALETTES).map(([k,p])=>'<button class="preset-choice '+(state.paletteName===k?'chosen':'')+'" data-palette="'+k+'"><span class="preset-swatches">'+Object.values(p.colors).slice(0,5).map(c=>'<i style="background:'+c+'"></i>').join('')+'</span><span>'+p.label+'</span></button>').join('')}</div></div><div class="field color-editor"><label for="block-color">Custom color · '+BLOCKS[state.blockType].label+'</label><div class="color-picker-row"><input id="block-color" type="color" value="'+blockColor(state.blockType)+'"/><span>'+blockColor(state.blockType).toUpperCase()+'</span></div><p class="tiny muted">Choose any color using the standard color picker. It changes only the selected block type.</p></div><div class="note">No fixed building-height limit is configured. Keep an eye on performance when creating very tall structures.</div>`;
   const select=panel.querySelector('#build-plot');if(owned.length){select.value=state.selected.size?Array.from(state.selected)[0]:owned[0];select.onchange=()=>{state.selected=new Set([select.value]);refreshSelection();};}
   panel.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>{state.blockType=b.dataset.block;renderSide();});
+  panel.querySelectorAll('[data-palette]').forEach(b=>b.onclick=()=>{const name=b.dataset.palette;state.paletteName=name;state.blockColors={...PALETTES[name].colors};updatePlacedBlockColors();persist();renderSide();toast(PALETTES[name].label+' palette applied.');});
+  panel.querySelector('#block-color').oninput=e=>{state.blockColors[state.blockType]=e.target.value;state.paletteName='custom';panel.querySelector('.color-picker-row span').textContent=e.target.value.toUpperCase();panel.querySelectorAll('[data-block]').forEach(btn=>{if(btn.dataset.block===state.blockType)btn.querySelector('i').style.background=e.target.value;});state.voxelMeshes.forEach(mesh=>{if(mesh.userData.type===state.blockType)mesh.material.color.set(e.target.value);});persist();};
  } else {
   panel.innerHTML=`<p class="eyebrow">YOUR LAND</p><h2>${state.owned.length?state.owned.length+' little spaces':'Your story starts here.'}</h2><p class="muted">Your public plot cards will live here. Build something worth a visit.</p><div class="empty-state">${state.owned.length?'Choose a plot card below to preview and share it.':'You have not claimed a plot yet. Explore the world to find one.'}</div><button class="primary-button" id="go-explore">${state.owned.length?'Explore your world':'Find a plot'} <span>↗</span></button>`;
   panel.querySelector('#go-explore').onclick=()=>setTab('explore');
