@@ -5,7 +5,7 @@ const app = document.querySelector('#app');
 const state = {
   mode: 'buyer', tab: 'explore', selected: new Set(), owned: [],
   plots: {}, blocks: {}, blockColors: {}, paletteName: 'meadow', biome: 'meadow', blockType: 'grass',
-  showGrid: true, camera: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
+  camera: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
   pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: ''
 };
 const SIZE = 6, PLOT = 10, ROAD = 5, STEP = PLOT + ROAD;
@@ -58,9 +58,9 @@ app.innerHTML = `
     </section>
     <section class="workspace">
       <div class="world-panel">
-        <div class="panel-toolbar"><div><span class="live-dot"></span><span id="map-caption">THE WORLD · STARTER MAP</span></div><div class="toolbar-actions"><button id="reset-camera" class="small-button">Reset view ↗</button><button id="grid-toggle" class="small-button">Grid: on</button></div></div>
+        <div class="panel-toolbar"><div><span class="live-dot"></span><span id="map-caption">THE WORLD · STARTER MAP</span></div><div class="toolbar-actions"><button id="reset-camera" class="small-button">Reset view ↗</button></div></div>
         <div id="world-canvas" class="world-canvas"><div class="loading">Preparing your world…</div></div>
-        <div class="map-legend"><span><i class="legend-dot available"></i>Available</span><span><i class="legend-dot owned"></i>Owned</span><span><i class="legend-dot selected"></i>Selected</span><span><i class="legend-dot road"></i>Street</span></div>
+        <div class="map-legend"><span><i class="legend-dot available"></i>Available</span><span><i class="legend-dot owned"></i>Owned</span><span><i class="legend-dot selected"></i>Selected</span><span><i class="legend-dot road"></i>Shared grass · not buildable</span></div>
       </div>
       <aside class="side-panel" id="side-panel"></aside>
     </section>
@@ -72,33 +72,77 @@ app.innerHTML = `
 `;
 
 const canvasHost = document.querySelector('#world-canvas');
-const scene = new THREE.Scene(); scene.background = new THREE.Color(0xf1f0eb); scene.fog = new THREE.Fog(0xf1f0eb, 100, 220); state.scene = scene;
+const SKY_COLOR = 0x83cfff;\nconst scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500); camera.position.set(75, 88, 105); camera.lookAt(42,0,42); state.camera = camera;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight); canvasHost.innerHTML=''; canvasHost.appendChild(renderer.domElement); state.renderer = renderer;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x85877f, 2.0));
 const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(45,90,35); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); scene.add(sun);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(260,260), new THREE.MeshStandardMaterial({color:0xe8e7e1, roughness:1})); ground.rotation.x=-Math.PI/2; ground.position.set(42,-0.55,42); ground.receiveShadow=true; scene.add(ground);
-const grid = new THREE.GridHelper(260,130,0xc9c8c1,0xd8d7d0); grid.position.set(42,-0.52,42); scene.add(grid);
+// A single floating island slab; no external floor or grid.
+const islandBase = new THREE.Mesh(
+  new THREE.BoxGeometry(SIZE * STEP - ROAD, 1, SIZE * STEP - ROAD),
+  new THREE.MeshStandardMaterial({ color: 0x9b6845, roughness: 1 })
+);
+islandBase.position.set(42.5, -0.5, 42.5);
+islandBase.receiveShadow = true;
+islandBase.castShadow = true;
+scene.add(islandBase);
 const plotGroup = new THREE.Group(); scene.add(plotGroup); const buildGroup = new THREE.Group(); scene.add(buildGroup);
 const plotMeshes = [];
 function makeWorld() {
   while(plotGroup.children.length) plotGroup.remove(plotGroup.children[0]);
   while(buildGroup.children.length) buildGroup.remove(buildGroup.children[0]);
   plotMeshes.length=0; state.groundMeshes=[]; state.voxelMeshes=[];
-  const boxGeo = new THREE.BoxGeometry(1,1,1);
-  for(let z=0;z<SIZE;z++) for(let x=0;x<SIZE;x++) {
-    const id=plotId(x,z), centerX=x*STEP+PLOT/2, centerZ=z*STEP+PLOT/2;
-    const material=new THREE.MeshStandardMaterial({color: isOwned(id)?0x9eb5a0:(state.plots[id]?.status==='unavailable'?0xb7b5ae:BIOMES[state.biome]), roughness:1});
-    const mesh=new THREE.Mesh(new THREE.BoxGeometry(PLOT,0.5,PLOT),material); mesh.position.set(centerX,-0.25,centerZ); mesh.receiveShadow=true; mesh.userData={plotId:id}; plotGroup.add(mesh); plotMeshes.push(mesh);
-    const edge=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PLOT,0.52,PLOT)),new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.55})); edge.position.copy(mesh.position); plotGroup.add(edge);
+  // One small grass cube per surface cell. The fixed palette creates a natural,
+  // tile-by-tile pattern without textures or gradients.
+  const grassTones = [0x76d64b, 0x83df52, 0x91e45c, 0x6fca43, 0x9be866];
+  const tileGeo = new THREE.BoxGeometry(0.99, 0.08, 0.99);
+  const tileMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+  const tileCount = (SIZE * STEP - ROAD) ** 2;
+  const grassTiles = new THREE.InstancedMesh(tileGeo, tileMat, tileCount);
+  const dummy = new THREE.Object3D();
+  let index = 0;
+  for (let z = 0; z < SIZE * STEP - ROAD; z++) {
+    for (let x = 0; x < SIZE * STEP - ROAD; x++) {
+      dummy.position.set(x + 0.5, 0.04, z + 0.5);
+      dummy.updateMatrix();
+      grassTiles.setMatrixAt(index, dummy.matrix);
+      // Deterministic variation: each grass cube has one flat, fixed green.
+      const seed = (x * 73856093) ^ (z * 19349663);
+      const tone = grassTones[Math.abs(seed) % grassTones.length];
+      grassTiles.setColorAt(index, new THREE.Color(tone));
+      index++;
+    }
   }
-  const roadMat=new THREE.MeshStandardMaterial({color:0xd7d6d0,roughness:1});
-  for(let i=0;i<SIZE-1;i++) {
-    const roadX=(i+1)*STEP-ROAD/2, roadZ=(i+1)*STEP-ROAD/2;
-    const a=new THREE.Mesh(new THREE.BoxGeometry(ROAD,0.12,SIZE*PLOT+(SIZE-1)*ROAD),roadMat); a.position.set(roadX,-0.22,(SIZE*STEP-ROAD)/2); plotGroup.add(a);
-    const b=new THREE.Mesh(new THREE.BoxGeometry(SIZE*PLOT+(SIZE-1)*ROAD,0.12,ROAD),roadMat); b.position.set((SIZE*STEP-ROAD)/2,-0.22,roadZ); plotGroup.add(b);
+  grassTiles.instanceMatrix.needsUpdate = true;
+  if (grassTiles.instanceColor) grassTiles.instanceColor.needsUpdate = true;
+  grassTiles.receiveShadow = true;
+  plotGroup.add(grassTiles);
+
+  // Only the 10x10 plot hit areas are selectable. The 5-wide grass strips
+  // between them remain visible but have no hit area, so they cannot be bought
+  // or built on unless the adjacent plots are both owned (bonus rule later).
+  const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, colorWrite: false, depthWrite: false });
+  for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
+    const id = plotId(x, z);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(PLOT, 0.12, PLOT), hitMaterial);
+    hit.position.set(x * STEP + PLOT / 2, 0.08, z * STEP + PLOT / 2);
+    hit.userData = { plotId: id };
+    plotGroup.add(hit);
+    plotMeshes.push(hit);
+
+    const highlight = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLOT, PLOT),
+      new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide })
+    );
+    highlight.rotation.x = -Math.PI / 2;
+    highlight.position.set(x * STEP + PLOT / 2, 0.086, z * STEP + PLOT / 2);
+    highlight.userData = { plotId: id, highlight: true };
+    plotGroup.add(highlight);
+    hit.userData.highlight = highlight;
   }
-  for(const [id,items] of Object.entries(state.blocks)) for(const item of items) addVoxel(id,item.x,item.y,item.z,item.type,false);
+  for (const [id, items] of Object.entries(state.blocks)) {
+    for (const item of items) addVoxel(id, item.x, item.y, item.z, item.type, false);
+  }
   refreshSelection();
 }
 function addVoxel(id,x,y,z,type,save=true) {
@@ -112,7 +156,10 @@ function removeVoxel(mesh) {
   if(i>=0) items.splice(i,1); buildGroup.remove(mesh); state.voxelMeshes=state.voxelMeshes.filter(v=>v!==mesh); persist();
 }
 function refreshSelection() {
-  plotMeshes.forEach(m=>{ const id=m.userData.plotId; const selected=state.selected.has(id); m.material.color.set(selected?0xc4a879:(isOwned(id)?0x9eb5a0:(state.plots[id]?.status==='unavailable'?0xb7b5ae:BIOMES[state.biome]))); m.material.emissive.set(selected?0x4c3518:0x000000); m.material.emissiveIntensity=selected?0.22:0; });
+  plotMeshes.forEach(m => {
+    const selected = state.selected.has(m.userData.plotId);
+    m.userData.highlight.material.opacity = selected ? 0.42 : 0;
+  });
 }
 function resize() { const w=canvasHost.clientWidth,h=canvasHost.clientHeight; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); }
 window.addEventListener('resize',resize);
@@ -143,8 +190,8 @@ function setTab(tab){state.tab=tab;document.querySelectorAll('.nav-link').forEac
 document.querySelectorAll('.nav-link').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
 document.querySelector('#mode-select').addEventListener('change',e=>{state.mode=e.target.value;state.selected.clear();refreshSelection();renderPage();toast(state.mode==='admin'?'Admin demo mode enabled.':'Buyer demo mode enabled.');});
 document.querySelector('#reset-camera').addEventListener('click',()=>{camera.position.set(75,88,105);camera.lookAt(42,0,42);});
-document.querySelector('#grid-toggle').addEventListener('click',e=>{state.showGrid=!state.showGrid;grid.visible=state.showGrid;e.target.textContent='Grid: '+(state.showGrid?'on':'off');});
-document.querySelector('#help-btn').addEventListener('click',()=>showModal('<p class="eyebrow">ABOUT THE PROTOTYPE</p><h2>A world made by many.</h2><p>This is an interactive frontend prototype. Purchases are simulated, and your demo data stays in this browser. Admin mode is not protected and must never be treated as real authorization.</p><p>Each plot measures 10 × 10 blocks. Streets are 5 blocks wide. Building has no configured height cap in this prototype.</p>'));
+
+document.querySelector('#help-btn').addEventListener('click',()=>showModal('<p class="eyebrow">ABOUT THE PROTOTYPE</p><h2>A world made by many.</h2><p>This is an interactive frontend prototype. Purchases are simulated, and your demo data stays in this browser. Admin mode is not protected and must never be treated as real authorization.</p><p>Each plot measures 10 × 10 blocks. Shared grass strips are 5 blocks wide and cannot be selected. Building has no configured height cap in this prototype.</p>'));
 function updateStats(){document.querySelector('#owned-count').textContent=state.owned.length;let free=0;for(let z=0;z<SIZE;z++)for(let x=0;x<SIZE;x++)if(isAvailable(plotId(x,z)))free++;document.querySelector('#available-count').textContent=free;}
 function renderPage(){
   updateStats(); const title=document.querySelector('#page-title'), sub=document.querySelector('#page-subtitle'), eyebrow=document.querySelector('#eyebrow');
@@ -162,7 +209,7 @@ function renderSide(){
   return;
  }
  if(state.tab==='explore'){
-  const ids=Array.from(state.selected);panel.innerHTML=`<p class="eyebrow">MAKE IT YOURS</p><h2>${ids.length?ids.length+' plot'+(ids.length>1?'s':'')+' selected':'Choose a plot'}</h2><p class="muted">${ids.length?'Selected plots are grouped into one simulated checkout.':'Each plot is 10 × 10 blocks. Streets between plots are 5 blocks wide.'}</p><div class="selection-list">${ids.length?ids.map(id=>'<div class="selection-row"><span>'+id+'</span><span>10 × 10 blocks</span><button data-remove="'+id+'">×</button></div>').join(''):'<div class="empty-state">Select any available plot on the map to see it here.</div>'}</div><div class="price-line"><span>Plots</span><strong>${ids.length}</strong></div><div class="price-line"><span>Demo total</span><strong>$${ids.length.toFixed(2)}</strong></div><p class="tiny muted">Adjacent plots selected together include the shared inner street strips in this demo.</p><button class="primary-button" id="checkout" ${ids.length?'':'disabled'}>Continue to checkout <span>↗</span></button><button class="text-button" id="clear-selection">Clear selection</button>`;
+  const ids=Array.from(state.selected);panel.innerHTML=`<p class="eyebrow">MAKE IT YOURS</p><h2>${ids.length?ids.length+' plot'+(ids.length>1?'s':'')+' selected':'Choose a plot'}</h2><p class="muted">${ids.length?'Selected plots are grouped into one simulated checkout.':'Each plot is 10 × 10 blocks. Grass strips between plots are 5 blocks wide and cannot be selected.'}</p><div class="selection-list">${ids.length?ids.map(id=>'<div class="selection-row"><span>'+id+'</span><span>10 × 10 blocks</span><button data-remove="'+id+'">×</button></div>').join(''):'<div class="empty-state">Select any available plot on the map to see it here.</div>'}</div><div class="price-line"><span>Plots</span><strong>${ids.length}</strong></div><div class="price-line"><span>Demo total</span><strong>$${ids.length.toFixed(2)}</strong></div><p class="tiny muted">Adjacent plots selected together include the shared inner grass strips in this demo.</p><button class="primary-button" id="checkout" ${ids.length?'':'disabled'}>Continue to checkout <span>↗</span></button><button class="text-button" id="clear-selection">Clear selection</button>`;
   panel.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{state.selected.delete(b.dataset.remove);refreshSelection();renderSide();});
   panel.querySelector('#clear-selection').onclick=()=>{state.selected.clear();refreshSelection();renderSide();};
   panel.querySelector('#checkout').onclick=openCheckout;
@@ -189,7 +236,7 @@ function openPlotAdmin(id){
 }
 function openCheckout(){
  const ids=Array.from(state.selected);if(!ids.length)return;
- showModal('<p class="eyebrow">SECURE YOUR SPACE · DEMO</p><h2>One small step.<br/>A place of your own.</h2><p>You are claiming '+ids.join(', ')+'. Each plot is 10 × 10 blocks. Adjacent inner street strips are included at no extra cost.</p><div class="checkout-summary"><span>'+ids.length+' × plot</span><strong>$'+ids.length.toFixed(2)+'</strong></div><p class="tiny muted">This is a simulated checkout. No payment details are requested and no money will be charged.</p><div class="field"><label>Your display name</label><input id="buyer-name" placeholder="What should we call you?" maxlength="32"/></div><button class="primary-button" id="pay-demo">Confirm demo purchase <span>↗</span></button>');
+ showModal('<p class="eyebrow">SECURE YOUR SPACE · DEMO</p><h2>One small step.<br/>A place of your own.</h2><p>You are claiming '+ids.join(', ')+'. Each plot is 10 × 10 blocks. Adjacent inner grass strips are included at no extra cost.</p><div class="checkout-summary"><span>'+ids.length+' × plot</span><strong>$'+ids.length.toFixed(2)+'</strong></div><p class="tiny muted">This is a simulated checkout. No payment details are requested and no money will be charged.</p><div class="field"><label>Your display name</label><input id="buyer-name" placeholder="What should we call you?" maxlength="32"/></div><button class="primary-button" id="pay-demo">Confirm demo purchase <span>↗</span></button>');
  document.querySelector('#pay-demo').onclick=()=>{const name=document.querySelector('#buyer-name').value.trim()||'Guest builder';if(ids.some(id=>!isAvailable(id))){toast('One of these plots is no longer available.');closeModal();return;}state.owned.push(...ids);state.owned=[...new Set(state.owned)];state.selected.clear();state.buyerName=name;persist();makeWorld();closeModal();renderPage();toast('Your land is ready. Welcome to bit of land.');setTab('myland');};
 }
 function openShareCard(id){
