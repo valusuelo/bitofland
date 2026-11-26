@@ -14,3 +14,17 @@
 .color-picker-row input[type=color]{width:38px;height:32px;padding:2px;border:0;background:transparent;cursor:pointer}
 .color-picker-row span{font:10px 'DM Mono',monospace;color:#777;letter-spacing:.04em}
 .color-editor .tiny{margin:0}
+
+
+/* Hybrid camera controls */
+.toolbar-actions{align-items:center;flex-wrap:wrap}
+.camera-switch,.iso-directions{display:flex;align-items:center;gap:4px}
+.camera-mode.active,.direction-button.active{background:#252622;color:#fff;border-color:#252622}
+.iso-directions.hidden{display:none}
+.direction-button{min-width:30px;padding:7px 8px}
+@media(max-width:700px){
+  .panel-toolbar{height:auto;min-height:48px;padding-top:8px;padding-bottom:8px;gap:8px;align-items:flex-start}
+  .toolbar-actions{justify-content:flex-end}
+  .camera-switch,.iso-directions{gap:3px}
+  .camera-mode,.direction-button{font-size:8px;padding:6px 7px}
+}
