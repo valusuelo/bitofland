@@ -6,7 +6,7 @@ const state = {
   mode: 'buyer', tab: 'explore', selected: new Set(), owned: [],
   plots: {}, blocks: {}, blockColors: {}, paletteName: 'meadow', biome: 'meadow', blockType: 'grass',
   camera: null, renderer: null, scene: null, raycaster: new THREE.Raycaster(),
-  pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: ''
+  pointer: new THREE.Vector2(), groundMeshes: [], voxelMeshes: [], previewUrl: '', grassTiles: null, grassBaseColors: [], lastGrassUpdate: 0
 };
 const SIZE = 6, PLOT = 10, ROAD = 5, STEP = PLOT + ROAD;
 const BLOCKS = {
@@ -72,7 +72,8 @@ app.innerHTML = `
 `;
 
 const canvasHost = document.querySelector('#world-canvas');
-const SKY_COLOR = 0x83cfff;\nconst scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
+const SKY_COLOR = 0x83cfff;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(SKY_COLOR); scene.fog = new THREE.Fog(SKY_COLOR, 150, 300); state.scene = scene;
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500); camera.position.set(75, 88, 105); camera.lookAt(42,0,42); state.camera = camera;
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.setSize(canvasHost.clientWidth, canvasHost.clientHeight); canvasHost.innerHTML=''; canvasHost.appendChild(renderer.domElement); state.renderer = renderer;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x85877f, 2.0));
@@ -86,12 +87,28 @@ islandBase.position.set(42.5, -0.5, 42.5);
 islandBase.receiveShadow = true;
 islandBase.castShadow = true;
 scene.add(islandBase);
+// Narrower earth-and-rock layers give the terrain a tapered floating-island silhouette.
+const islandLayers = [
+  { w: 76, h: 1.35, d: 76, y: -1.55, color: 0x86583e },
+  { w: 62, h: 1.55, d: 62, y: -2.95, color: 0x6f6256 },
+  { w: 43, h: 1.25, d: 43, y: -4.25, color: 0x5b5b57 }
+];
+for (const layer of islandLayers) {
+  const rock = new THREE.Mesh(
+    new THREE.BoxGeometry(layer.w, layer.h, layer.d),
+    new THREE.MeshStandardMaterial({ color: layer.color, roughness: 1 })
+  );
+  rock.position.set(42.5, layer.y, 42.5);
+  rock.castShadow = true;
+  rock.receiveShadow = true;
+  scene.add(rock);
+}
 const plotGroup = new THREE.Group(); scene.add(plotGroup); const buildGroup = new THREE.Group(); scene.add(buildGroup);
 const plotMeshes = [];
 function makeWorld() {
   while(plotGroup.children.length) plotGroup.remove(plotGroup.children[0]);
   while(buildGroup.children.length) buildGroup.remove(buildGroup.children[0]);
-  plotMeshes.length=0; state.groundMeshes=[]; state.voxelMeshes=[];
+  plotMeshes.length=0; state.groundMeshes=[]; state.voxelMeshes=[]; state.grassTiles=null; state.grassBaseColors=[];
   // One small grass cube per surface cell. The fixed palette creates a natural,
   // tile-by-tile pattern without textures or gradients.
   const grassTones = [0x76d64b, 0x83df52, 0x91e45c, 0x6fca43, 0x9be866];
@@ -99,6 +116,8 @@ function makeWorld() {
   const tileMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
   const tileCount = (SIZE * STEP - ROAD) ** 2;
   const grassTiles = new THREE.InstancedMesh(tileGeo, tileMat, tileCount);
+  state.grassTiles = grassTiles;
+  const grassBaseColors = [];
   const dummy = new THREE.Object3D();
   let index = 0;
   for (let z = 0; z < SIZE * STEP - ROAD; z++) {
@@ -109,12 +128,15 @@ function makeWorld() {
       // Deterministic variation: each grass cube has one flat, fixed green.
       const seed = (x * 73856093) ^ (z * 19349663);
       const tone = grassTones[Math.abs(seed) % grassTones.length];
-      grassTiles.setColorAt(index, new THREE.Color(tone));
+      const tileColor = new THREE.Color(tone);
+      grassBaseColors.push(tileColor.clone());
+      grassTiles.setColorAt(index, tileColor);
       index++;
     }
   }
   grassTiles.instanceMatrix.needsUpdate = true;
   if (grassTiles.instanceColor) grassTiles.instanceColor.needsUpdate = true;
+  state.grassBaseColors = grassBaseColors;
   grassTiles.receiveShadow = true;
   plotGroup.add(grassTiles);
 
@@ -183,7 +205,23 @@ renderer.domElement.addEventListener('pointerup',e=>{
   if(state.tab==='explore' && isAvailable(id)){state.selected.has(id)?state.selected.delete(id):state.selected.add(id);refreshSelection();renderSide();}
   else if(isOwned(id)){state.selected=new Set([id]);refreshSelection();renderSide();}
 });
-function animate(){requestAnimationFrame(animate);renderer.render(scene,camera);} animate(); makeWorld();
+function animate(now = 0){
+  requestAnimationFrame(animate);
+  // Slowly breathe the individual grass tiles through tiny brightness changes.
+  // Each tile keeps its own green tone; the movement is subtle rather than noisy.
+  if (state.grassTiles && now - state.lastGrassUpdate > 180) {
+    const t = now * 0.00042;
+    for (let i = 0; i < state.grassBaseColors.length; i++) {
+      const wave = Math.sin(t + i * 0.071) * 0.035;
+      const color = state.grassBaseColors[i].clone().multiplyScalar(1 + wave);
+      state.grassTiles.setColorAt(i, color);
+    }
+    if (state.grassTiles.instanceColor) state.grassTiles.instanceColor.needsUpdate = true;
+    state.lastGrassUpdate = now;
+  }
+  renderer.render(scene,camera);
+}
+animate(); makeWorld();
 
 function toast(message){const el=document.querySelector('#toast');el.textContent=message;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),2600);}
 function setTab(tab){state.tab=tab;document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));renderPage();}
